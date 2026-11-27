@@ -1,13 +1,12 @@
 {
-  "name": "private-meeting-translator",
+  "name": "meetlingo-fixed",
   "version": "1.0.0",
   "private": true,
-  "description": "A private English-to-Urdu live meeting translation helper",
-  "main": "server.js",
+  "description": "MeetLingo English-to-Urdu meeting helper",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=18"
+  "dependencies": {
+    "express": "^4.21.2"
   }
 }

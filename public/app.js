@@ -1,245 +1,194 @@
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const listenBadge = document.getElementById('listenBadge');
-const listenMessage = document.getElementById('listenMessage');
-const micVisual = document.getElementById('micVisual');
-const emptyState = document.getElementById('emptyState');
-const captionsList = document.getElementById('captionsList');
-const interimRow = document.getElementById('interimRow');
-const interimText = document.getElementById('interimText');
-const sessionClock = document.getElementById('sessionClock');
-const sentenceCount = document.getElementById('sentenceCount');
-const manualForm = document.getElementById('manualForm');
-const manualInput = document.getElementById('manualInput');
-const charCount = document.getElementById('charCount');
-const manualResult = document.getElementById('manualResult');
-const translateBtn = document.getElementById('translateBtn');
-const toast = document.getElementById('toast');
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const clearBtn = document.getElementById("clearBtn");
+const suggestBtn = document.getElementById("suggestBtn");
+const transcriptEl = document.getElementById("transcript");
+const translationEl = document.getElementById("translation");
+const statusText = document.getElementById("statusText");
+const statusDot = document.getElementById("statusDot");
+const notice = document.getElementById("notice");
 
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
-let isListening = false;
-let startedAt = null;
-let clockInterval = null;
+let listening = false;
+let finalText = "";
 let translationQueue = Promise.resolve();
-let count = 0;
-let toastTimer = null;
+let latestSentence = "";
 
-function showToast(message) {
-  toast.textContent = message;
-  toast.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 3600);
+function setStatus(active, message) {
+  statusText.textContent = message;
+  statusDot.classList.toggle("active", active);
 }
 
-function setListening(active) {
-  isListening = active;
-  startBtn.disabled = active;
-  stopBtn.disabled = !active;
-  listenBadge.className = `state-badge ${active ? 'live' : 'idle'}`;
-  listenBadge.innerHTML = active ? '<i></i> Listening' : '<i></i> Not listening';
-  listenMessage.textContent = active
-    ? 'Listening for English speech from your meeting…'
-    : 'Your microphone is ready when you are.';
-  micVisual.classList.toggle('is-live', active);
-  if (active && !startedAt) {
-    startedAt = Date.now();
-    clockInterval = setInterval(updateClock, 1000);
-  }
+function showTranscript() {
+  transcriptEl.classList.toggle("empty-state", !finalText);
+  transcriptEl.textContent = finalText || "Your English speech will appear here when you start listening.";
 }
 
-function updateClock() {
-  if (!startedAt) return;
-  const total = Math.floor((Date.now() - startedAt) / 1000);
-  const minutes = String(Math.floor(total / 60)).padStart(2, '0');
-  const seconds = String(total % 60).padStart(2, '0');
-  sessionClock.textContent = `${minutes}:${seconds}`;
-}
-
-function stopClock() {
-  clearInterval(clockInterval);
-  clockInterval = null;
-}
-
-function decodeHtml(value) {
-  const element = document.createElement('textarea');
-  element.innerHTML = value;
-  return element.value;
-}
-
-function addCaptionRow(english, translation = 'Translating…') {
-  emptyState.classList.add('hidden');
-  const row = document.createElement('article');
-  row.className = 'caption-row';
-  const englishCell = document.createElement('div');
-  englishCell.className = 'caption-cell';
-  const englishMeta = document.createElement('span');
-  englishMeta.className = 'caption-meta';
-  englishMeta.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const englishText = document.createElement('span');
-  englishText.textContent = english;
-  englishCell.append(englishMeta, englishText);
-
-  const urduCell = document.createElement('div');
-  urduCell.className = 'caption-cell pending';
-  urduCell.dir = 'rtl';
-  urduCell.textContent = translation;
-  row.append(englishCell, urduCell);
-  captionsList.appendChild(row);
-  captionsList.scrollTop = captionsList.scrollHeight;
-  count += 1;
-  sentenceCount.textContent = `${count} ${count === 1 ? 'sentence' : 'sentences'}`;
-  return urduCell;
-}
-
-async function requestTranslation(text) {
-  const response = await fetch('/api/translate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text })
+async function translateSentence(sentence) {
+  const response = await fetch("/api/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: sentence, source: "en", target: "ur" })
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Translation failed. Please try again.');
-  return decodeHtml(data.translation || '');
+  if (!response.ok) throw new Error(data.error || "Translation failed.");
+  return data.translation;
 }
 
-function queueTranslation(text, onSuccess, onError) {
-  translationQueue = translationQueue
-    .then(async () => {
-      const result = await requestTranslation(text);
-      onSuccess(result);
-    })
-    .catch((error) => {
-      onError(error);
-    });
-  return translationQueue;
-}
-
-function addSpeechSentence(text) {
-  const cleanText = text.trim();
-  if (!cleanText) return;
-  const translationCell = addCaptionRow(cleanText);
-  queueTranslation(cleanText,
-    (translated) => {
-      translationCell.classList.remove('pending');
-      translationCell.textContent = translated;
-    },
-    (error) => {
-      translationCell.classList.remove('pending');
-      translationCell.textContent = `Translation unavailable: ${error.message}`;
-      showToast(error.message);
+function queueTranslation(sentence) {
+  if (!sentence || sentence.trim().length < 2) return;
+  latestSentence = sentence.trim();
+  translationQueue = translationQueue.then(async () => {
+    try {
+      translationEl.classList.remove("empty-state");
+      translationEl.textContent = "ترجمہ ہو رہا ہے...";
+      const translated = await translateSentence(sentence.trim());
+      translationEl.textContent = translated || "ترجمہ دستیاب نہیں۔";
+    } catch (error) {
+      translationEl.textContent = `ترجمہ نہیں ہو سکا: ${error.message}`;
+      notice.textContent = "Translation service is unavailable or has reached its limit. Please try again shortly.";
     }
-  );
+  });
 }
 
 function startListening() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    showToast('Live speech recognition needs Google Chrome or Microsoft Edge on a computer.');
+    notice.textContent = "Speech recognition is not supported in this browser. Please use the latest Chrome or Edge.";
     return;
   }
-  if (!recognition) {
-    recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
+  if (listening) return;
 
-    recognition.onstart = () => setListening(true);
-    recognition.onresult = (event) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const text = event.results[i][0].transcript;
-        if (event.results[i].isFinal) addSpeechSentence(text);
-        else interim += text;
-      }
-      interimText.textContent = interim || 'Listening…';
-      interimRow.classList.toggle('hidden', !interim);
-    };
-    recognition.onerror = (event) => {
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setListening(false);
-        showToast('Microphone permission was blocked. Allow microphone access in your browser settings.');
-      } else if (event.error === 'audio-capture') {
-        setListening(false);
-        showToast('No microphone was found. Check your Windows input device.');
-      } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        showToast(`Speech recognition: ${event.error}`);
-      }
-    };
-    recognition.onend = () => {
-      if (isListening) {
-        try { recognition.start(); } catch (_) { /* The browser may still be closing the previous session. */ }
+  recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    listening = true;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    setStatus(true, "Listening to microphone");
+    notice.textContent = "Listening in English. Your microphone may hear both the meeting audio and your own voice.";
+  };
+
+  recognition.onresult = (event) => {
+    let interim = "";
+    let newlyFinal = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const phrase = event.results[i][0].transcript.trim();
+      if (event.results[i].isFinal && phrase) {
+        newlyFinal += phrase + " ";
       } else {
-        setListening(false);
-        interimRow.classList.add('hidden');
+        interim += phrase + " ";
       }
+    }
+    if (newlyFinal.trim()) {
+      finalText += (finalText ? " " : "") + newlyFinal.trim();
+      showTranscript();
+      queueTranslation(newlyFinal);
+    }
+    if (interim.trim()) {
+      transcriptEl.classList.remove("empty-state");
+      transcriptEl.textContent = (finalText ? finalText + " " : "") + interim.trim();
+    } else {
+      showTranscript();
+    }
+  };
+
+  recognition.onerror = (event) => {
+    const messages = {
+      "not-allowed": "Microphone permission was blocked. Allow microphone access in your browser.",
+      "no-speech": "No speech detected. Check microphone volume and try again.",
+      "audio-capture": "No microphone was found. Check your microphone connection.",
+      "network": "Speech recognition needs an internet connection."
     };
-  }
+    notice.textContent = messages[event.error] || `Speech recognition issue: ${event.error}`;
+  };
+
+  recognition.onend = () => {
+    listening = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus(false, "Microphone is off");
+  };
 
   try {
     recognition.start();
-    setListening(true);
-    showToast('Listening started. Allow microphone access if your browser asks.');
   } catch (error) {
-    if (error.name === 'InvalidStateError') return;
-    showToast('Could not start the microphone. Please check browser permissions.');
+    notice.textContent = "Could not start microphone. Please wait a moment and try again.";
   }
 }
 
 function stopListening() {
-  setListening(false);
-  interimRow.classList.add('hidden');
-  if (recognition) {
-    try { recognition.stop(); } catch (_) { /* Already stopped. */ }
-  }
-  stopClock();
+  if (recognition && listening) recognition.stop();
 }
 
-startBtn.addEventListener('click', startListening);
-stopBtn.addEventListener('click', stopListening);
+function makeSuggestions(text) {
+  const t = text.toLowerCase();
+  let simple = "Thank you for explaining. I understand.";
+  let professional = "Thank you for the clarification. I understand your point and will take it into consideration.";
 
-document.getElementById('clearBtn').addEventListener('click', () => {
-  captionsList.innerHTML = '';
-  count = 0;
-  sentenceCount.textContent = '0 sentences';
-  emptyState.classList.remove('hidden');
-  showToast('This screen’s translation history has been cleared.');
+  if (/\b(question|any questions|queries)\b/.test(t)) {
+    simple = "Yes, I have one question. Could you please explain that part again?";
+    professional = "Thank you. I do have a question regarding this point. Could you please clarify it further?";
+  } else if (/\b(deadline|when can|by when|timeline)\b/.test(t)) {
+    simple = "I can work on this and share an update soon.";
+    professional = "I can take ownership of this and will confirm a realistic timeline shortly.";
+  } else if (/\b(price|cost|budget|payment)\b/.test(t)) {
+    simple = "I will review the details and get back to you.";
+    professional = "I will review the pricing details carefully and follow up with a clear response.";
+  } else if (/\b(problem|issue|error|not working)\b/.test(t)) {
+    simple = "I understand the issue. I will check it and update you.";
+    professional = "I understand the concern. I will investigate the issue and share an update with the next steps.";
+  } else if (/\b(send|share|email|document|file)\b/.test(t)) {
+    simple = "Sure, I will share it with you.";
+    professional = "Certainly. I will prepare the relevant information and share it with you shortly.";
+  } else if (/\b(agree|sounds good|okay|fine)\b/.test(t)) {
+    simple = "That sounds good to me. Thank you.";
+    professional = "That works for me. Thank you for confirming.";
+  } else if (/\b(introduce|about yourself|your experience)\b/.test(t)) {
+    simple = "I am learning and improving my skills, and I am happy to discuss my experience.";
+    professional = "I am continuously developing my skills and would be pleased to share more about my experience and relevant work.";
+  }
+  document.getElementById("simpleReply").textContent = simple;
+  document.getElementById("professionalReply").textContent = professional;
+}
+
+startBtn.addEventListener("click", startListening);
+stopBtn.addEventListener("click", stopListening);
+clearBtn.addEventListener("click", () => {
+  finalText = "";
+  latestSentence = "";
+  showTranscript();
+  translationEl.textContent = "آپ کا اردو ترجمہ یہاں نظر آئے گا۔";
+  translationEl.classList.add("empty-state");
+  document.getElementById("simpleReply").textContent = "Start listening, then select “Suggest replies”.";
+  document.getElementById("professionalReply").textContent = "A more polished response will appear here.";
+  notice.textContent = "Transcript cleared.";
 });
-
-manualInput.addEventListener('input', () => {
-  charCount.textContent = `${manualInput.value.length} / 500 characters`;
-});
-
-manualForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = manualInput.value.trim();
+suggestBtn.addEventListener("click", () => {
+  const text = finalText || latestSentence;
   if (!text) {
-    showToast('Please type or paste an English sentence first.');
-    manualInput.focus();
+    notice.textContent = "Start listening first so MeetLingo has some conversation text.";
     return;
   }
-  translateBtn.disabled = true;
-  translateBtn.textContent = 'Translating…';
-  manualResult.classList.remove('hidden');
-  manualResult.textContent = 'ترجمہ ہو رہا ہے…';
-  try {
-    manualResult.textContent = await requestTranslation(text);
-  } catch (error) {
-    manualResult.textContent = error.message;
-    showToast(error.message);
-  } finally {
-    translateBtn.disabled = false;
-    translateBtn.innerHTML = 'Translate <span>→</span>';
-  }
+  makeSuggestions(text);
+});
+document.querySelectorAll(".copy-btn").forEach(button => {
+  button.addEventListener("click", async () => {
+    const text = document.getElementById(button.dataset.copy).textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied!";
+      setTimeout(() => button.textContent = "Copy reply", 1400);
+    } catch {
+      notice.textContent = "Copy was blocked by your browser. Select the reply text and copy it manually.";
+    }
+  });
 });
 
-// The server is local; this check lets the page show a useful error if it was opened as a file.
-fetch('/api/health').catch(() => showToast('Please open this app through http://localhost:3000, not by double-clicking index.html.'));
-
-window.addEventListener('beforeunload', () => {
-  if (recognition) {
-    isListening = false;
-    try { recognition.stop(); } catch (_) { /* Ignore shutdown errors. */ }
-  }
-  stopClock();
-});
+if (!SpeechRecognition) {
+  notice.textContent = "This browser may not support speech recognition. Please open MeetLingo in the latest Chrome or Edge.";
+}
